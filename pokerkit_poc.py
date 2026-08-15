@@ -707,6 +707,22 @@ def _pp(value: Any) -> str:
     return json.dumps(value, indent=2, sort_keys=True, default=str)
 
 
+def compact_action_repr(action: Tuple[str, Optional[int]]) -> str:
+    name, amount = action
+    if amount is None:
+        return str(name)
+    return f"{name}:{amount}"
+
+
+def parse_action_repr(text: str) -> Tuple[str, Optional[int]]:
+    if text is None:
+        return ('', None)
+    if ':' not in text:
+        return (text, 0)
+    name, amount = text.split(':', 1)
+    return (name, int(amount))
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Short-deck HUNL smoke test")
     parser.add_argument("--verbose", action="store_true", help="Print the full action trace and board progression.")
