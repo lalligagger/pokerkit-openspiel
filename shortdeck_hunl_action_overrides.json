@@ -1,0 +1,49 @@
+{
+  "game": "shortdeck_hunl",
+  "description": "Default no-limit short-deck action overrides for the smoke test and MCCFR scaffold.",
+  "rules": {
+    "preflop": {
+      "first_to_act_allowed": [
+        "fold",
+        "bet_or_raise"
+      ],
+      "allow_limp": false,
+      "open_amounts": [
+        4
+      ]
+    },
+    "flop": {
+      "first_to_act_allowed": [
+        "check_or_call",
+        "bet_or_raise"
+      ],
+      "bet_percent_of_pot": [
+        0.5,
+        1.0
+      ],
+      "raise_multiplier": 2.5
+    },
+    "turn": {
+      "first_to_act_allowed": [
+        "check_or_call",
+        "bet_or_raise"
+      ],
+      "bet_percent_of_pot": [
+        0.5,
+        1.0
+      ],
+      "raise_multiplier": 2.5
+    },
+    "river": {
+      "first_to_act_allowed": [
+        "check_or_call",
+        "bet_or_raise"
+      ],
+      "bet_percent_of_pot": [
+        0.5,
+        1.0
+      ],
+      "raise_multiplier": 2.5
+    }
+  }
+}
