@@ -213,7 +213,6 @@ class ActionSpaceReducer:
     allow_fold: bool = True
     policy: Optional[StructuredActionPolicy] = None
     warn_on_empty: bool = True
-    fallback_on_empty: bool = True
     _warned_empty_actions: bool = field(default=False, init=False, repr=False)
 
     @staticmethod
@@ -475,17 +474,18 @@ class ActionSpaceReducer:
         if raw_bet_actions and not any(name.lower() in {"bet_or_raise", "bet", "raise", "complete_bet_or_raise_to"} for name, _ in filtered):
             filtered = [action for action in filtered if action[0].lower() in {"check_or_call", "call", "check", "fold", "fold_action"}]
 
+        if not legal_actions:
+            return []
+
         if not filtered:
             if self.warn_on_empty and not self._warned_empty_actions:
                 print(
                     "WARNING: policy filter removed all legal actions; "
-                    f"{'preserving original PokerKit legal actions for diagnosis' if self.fallback_on_empty else 'returning empty legal actions by policy'}"
-                    f". street={current_street}, actor={getattr(state, 'actor_index', None)}, "
+                    "returning empty legal actions by policy. "
+                    f"street={current_street}, actor={getattr(state, 'actor_index', None)}, "
                     f"legal={legal_actions}"
                 )
                 self._warned_empty_actions = True
-            if self.fallback_on_empty:
-                return list(legal_actions)
             return []
 
         return filtered
@@ -590,6 +590,77 @@ def _policy_from_action_counts(tracker: StrategyTracker) -> Dict[str, float]:
     return {action: count / total for action, count in tracker.action_counts.items()}
 
 
+def river_terminal_resolution(state) -> str:
+    """Describe the terminal resolution mode for the current state.
+
+    We intentionally leave the actual winner determination to PokerKit. For a
+    river showdown in which the last bet/raise was called, the state should be
+    resolved through the standard showdown path. If the hand has reached an all-in
+    situation, PokerKit's runout-count/showdown machinery is used to sample the
+    appropriate runouts rather than using a synthetic rule. In both cases the
+    terminal path is considered a PokerKit-resolved state, not a custom rule.
+    """
+    if getattr(state, 'status', None) is False:
+        return 'terminal'
+    if getattr(state, 'all_in_status', False):
+        return 'all_in_runout'
+    if ActionSpaceReducer._current_street_name(state) == 'river':
+        return 'river_showdown'
+    return 'nonterminal'
+
+
+def advance_state_to_terminal(
+    state,
+    *,
+    reducer: Optional[ActionSpaceReducer] = None,
+    max_steps: int = 200,
+) -> tuple[int, Any]:
+    """Advance a PokerKit state through the full hand until it is terminal.
+
+    River resolution follows the real PokerKit path: a last bet/raise being called
+    should continue through the native showdown flow and not be treated as a
+    synthetic custom terminal state. All-in situations remain under PokerKit's
+    runout-selection/showdown machinery so repeated runouts are sampled by the
+    engine itself.
+    """
+    for step in range(max_steps):
+        if getattr(state, 'status', None) is False:
+            return step, state
+
+        resolution = river_terminal_resolution(state)
+        if resolution == 'river_showdown':
+            if callable(getattr(state, 'can_select_runout_count', None)) and state.can_select_runout_count():
+                state.select_runout_count(None)
+                continue
+            if callable(getattr(state, 'can_show_or_muck_hole_cards', None)) and state.can_show_or_muck_hole_cards():
+                state.show_or_muck_hole_cards()
+                continue
+
+        legal = legal_actions_for_state(state, reducer=reducer)
+        if not legal:
+            if callable(getattr(state, 'can_select_runout_count', None)) and state.can_select_runout_count():
+                state.select_runout_count(None)
+                continue
+            if callable(getattr(state, 'can_show_or_muck_hole_cards', None)) and state.can_show_or_muck_hole_cards():
+                state.show_or_muck_hole_cards()
+                continue
+            if callable(getattr(state, 'can_deal_board', None)) and state.can_deal_board():
+                state.deal_board()
+                continue
+            break
+
+        action = choose_uniform_action(state, reducer=reducer)
+        if action is None:
+            break
+
+        apply_action(state, action)
+
+        if getattr(state, 'status', None) is False:
+            return step + 1, state
+
+    return max_steps, state
+
+
 def simulate_uniform_hand_to_showdown(
     spec: ShortDeckNoLimitConfig,
     *,
@@ -598,14 +669,51 @@ def simulate_uniform_hand_to_showdown(
     reducer: Optional[ActionSpaceReducer] = None,
 ) -> Dict[str, Any]:
     state = build_state(spec)
+
+    if hasattr(state, "can_collect_bets") and state.can_collect_bets():
+        state.collect_bets()
+    if hasattr(state, "can_post_blind_or_straddle"):
+        for _ in range(2):
+            if state.can_post_blind_or_straddle():
+                state.post_blind_or_straddle()
+    if hasattr(state, "can_deal_hole"):
+        for _ in range(getattr(state, "player_count", spec.num_players) * 2):
+            if state.can_deal_hole():
+                state.deal_hole()
+
     tracker = StrategyTracker()
     trace: List[Dict[str, Any]] = []
     step = 0
 
     while step < max_steps:
+        if getattr(state, 'status', None) is False:
+            break
+
         legal = legal_actions_for_state(state, reducer=reducer)
         if not legal:
-            if callable(getattr(state, "can_deal_hole", None)) and state.can_deal_hole() or callable(getattr(state, "can_deal_board", None)) and state.can_deal_board():
+            if callable(getattr(state, 'can_select_runout_count', None)) and state.can_select_runout_count():
+                state.select_runout_count(None)
+                if verbose:
+                    trace.append({
+                        "step": step,
+                        "event": "runout_count_selection",
+                        "street": str(getattr(state, "street", "unknown")),
+                        "runout_count": getattr(state, "runout_count", None),
+                    })
+                step += 1
+                continue
+            if callable(getattr(state, "can_show_or_muck_hole_cards", None)) and state.can_show_or_muck_hole_cards():
+                state.show_or_muck_hole_cards()
+                if verbose:
+                    trace.append({
+                        "step": step,
+                        "event": "show_or_muck",
+                        "street": str(getattr(state, "street", "unknown")),
+                        "showdown_index": getattr(state, "showdown_index", None),
+                    })
+                step += 1
+                continue
+            if callable(getattr(state, "can_deal_board", None)) and state.can_deal_board():
                 _advance_dealers(state)
                 if verbose:
                     trace.append({
@@ -650,6 +758,9 @@ def simulate_uniform_hand_to_showdown(
             })
 
         apply_action(state, action)
+
+        if getattr(state, "status", None) is False:
+            break
 
         if callable(getattr(state, "can_deal_board", None)) and state.can_deal_board() and getattr(state, "street", None) is not None:
             prev_board = list(getattr(state, "board_cards", []) or [])
@@ -728,13 +839,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--verbose", action="store_true", help="Print the full action trace and board progression.")
     parser.add_argument("--policy-json", type=str, default=None, help="Optional JSON file describing street-aware action space rules.")
     parser.add_argument("--iterations", type=int, default=10, help="Number of uniform smoke-test hands to run.")
-    parser.add_argument(
-        "--no-fallback-on-empty",
-        dest="fallback_on_empty",
-        action="store_false",
-        default=True,
-        help="Strict mode: if the policy removes all legal actions, return an empty action set instead of falling back to PokerKit's legal actions.",
-    )
     return parser.parse_args()
 
 
@@ -781,7 +885,6 @@ def main() -> None:
         max_legal_actions=6,
         allowed_bet_amounts=(1, 2, 4, 8, 16, 32, 60),
         policy=policy,
-        fallback_on_empty=args.fallback_on_empty,
     )
 
     print("Short-deck HUNL config:")

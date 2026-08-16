@@ -34,6 +34,6 @@ policy = StructuredActionPolicy(streets={
     )
 })
 
-reducer = ActionSpaceReducer(policy=policy, fallback_on_empty=False)
+reducer = ActionSpaceReducer(policy=policy)
 print("free:", legal_actions_for_state(state, reducer=None))
 print("filtered:", legal_actions_for_state(state, reducer=reducer))

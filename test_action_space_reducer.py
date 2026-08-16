@@ -24,11 +24,8 @@ def _started_preflop_state():
     return state
 
 
-def test_reducer_can_disable_fallback_on_empty():
-    reducer = ActionSpaceReducer(
-        policy=StructuredActionPolicy(streets={}),
-        fallback_on_empty=False,
-    )
+def test_reducer_returns_empty_when_policy_removes_all_actions():
+    reducer = ActionSpaceReducer(policy=StructuredActionPolicy(streets={}))
     state = build_state(build_config())
 
     assert reducer.reduce(state, []) == []
@@ -46,7 +43,7 @@ def test_no_limp_preflop_removes_check_or_call_for_first_actor():
             raise_multiplier=2.5,
         )
     })
-    reducer = ActionSpaceReducer(policy=policy, fallback_on_empty=False)
+    reducer = ActionSpaceReducer(policy=policy)
     state = _started_preflop_state()
 
     assert ('check_or_call', 0) in legal_actions_for_state(state, reducer=None)
@@ -75,7 +72,7 @@ def test_live_betting_state_keeps_pokerkit_legal_bet_family():
             raise_multiplier=2.5,
         ),
     })
-    reducer = ActionSpaceReducer(policy=policy, fallback_on_empty=False)
+    reducer = ActionSpaceReducer(policy=policy)
     state = _started_preflop_state()
     state.complete_bet_or_raise_to(4)
 
@@ -108,7 +105,7 @@ def test_first_to_act_allowlist_removes_open_fold_on_this_street():
             raise_multiplier=2.5,
         ),
     })
-    reducer = ActionSpaceReducer(policy=policy, fallback_on_empty=False)
+    reducer = ActionSpaceReducer(policy=policy)
     state = _started_preflop_state()
 
     filtered = legal_actions_for_state(state, reducer=reducer)
@@ -185,6 +182,16 @@ def test_end_to_end_hand_reaches_terminal_with_expected_street_progression():
     assert 'final_stacks' in result
 
 
+def test_simulate_uniform_hand_to_showdown_starts_a_ready_hand():
+    from pokerkit_poc import ActionSpaceReducer, StructuredActionPolicy, build_default_policy, simulate_uniform_hand_to_showdown
+
+    reducer = ActionSpaceReducer(policy=build_default_policy())
+    result = simulate_uniform_hand_to_showdown(build_config(), reducer=reducer)
+
+    assert result["final_status"] is not None
+    assert result["final_status"] != "True" or result["final_stacks"] != [60, 60]
+
+
 def test_compact_action_repr_round_trips_for_core_action_family():
     from pokerkit_poc import compact_action_repr, parse_action_repr
 
@@ -199,3 +206,20 @@ def test_compact_action_repr_round_trips_for_core_action_family():
         encoded = compact_action_repr(action)
         decoded = parse_action_repr(encoded)
         assert decoded == action
+
+
+def test_regret_table_tracks_seen_infosets_and_updates():
+    from mccfr_launcher import RegretTable
+
+    table = RegretTable()
+    table.observe(
+        info_set_key="preflop:p0:[]",
+        legal_actions=[('fold', 0), ('bet_or_raise', 4)],
+        chosen_action=('bet_or_raise', 4),
+        realized_utility=2.0,
+    )
+
+    summary = table.summary()
+    assert summary["infoset_count"] >= 1
+    assert summary["total_regret_entries"] >= 2
+    assert summary["nonzero_regret_entries"] >= 1

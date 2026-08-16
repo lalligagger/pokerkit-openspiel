@@ -25,13 +25,6 @@ def parse_args():
     parser.add_argument('--node-detail', type=str, choices=['preflop', 'flop', 'turn', 'river'], default=None,
                         help='Print detailed node summaries for one street only (e.g. flop) instead of dumping all nodes.')
     parser.add_argument('--policy-json', type=str, default=str(Path(__file__).with_name('shortdeck_hunl_action_overrides.json')))
-    parser.add_argument(
-        '--no-fallback-on-empty',
-        dest='fallback_on_empty',
-        action='store_false',
-        default=True,
-        help='Strict mode: if the policy removes all legal actions, do not restore the original PokerKit actions.',
-    )
     return parser.parse_args()
 
 
@@ -73,12 +66,11 @@ def start_hand(state, spec):
     return state
 
 
-def build_reducer(policy_path: str, fallback_on_empty: bool = True):
+def build_reducer(policy_path: str):
     return ActionSpaceReducer(
         max_legal_actions=6,
         allowed_bet_amounts=(1, 2, 4, 8, 16, 32, 60),
         policy=policy_from_json(policy_path),
-        fallback_on_empty=fallback_on_empty,
     )
 
 
@@ -174,7 +166,7 @@ def run(mode: str, iterations: int, spec, reducer=None):
 if __name__ == '__main__':
     args = parse_args()
     spec = build_config()
-    reducer = build_reducer(args.policy_json, fallback_on_empty=args.fallback_on_empty)
+    reducer = build_reducer(args.policy_json)
 
     for mode in args.modes:
         rows = run(mode, args.iterations, spec, reducer=reducer)
@@ -190,7 +182,7 @@ if __name__ == '__main__':
         print(f'=== MODE: {mode} ===')
         print(f'unique_nodes={len(rows)}')
         print(f'total_visits={total_visits}')
-        print(f'fallback_on_empty={args.fallback_on_empty}')
+        print('fallback_on_empty=False')
         print(f'postflop_nodes={sum(1 for row in rows if row["node"].startswith("flop:") or row["node"].startswith("turn:") or row["node"].startswith("river:"))}')
         print(f'average_actions_per_node={sum(len(row["actions"]) for row in rows) / len(rows) if rows else 0.0}')
         print(f'action_family_counts={dict(sorted(((str(k[0]), v) for k, v in action_counter.items()), key=lambda item: item[0]))}')
